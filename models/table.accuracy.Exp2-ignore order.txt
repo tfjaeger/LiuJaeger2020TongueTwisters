@@ -1,0 +1,12 @@
+\begin{table}[t]
+
+\caption{\label{tab:acc:exp2}Transcription accuracy (Experiment 2)}
+\centering
+\begin{tabular}{l|r|r}
+\hline
+  & 	extesh-Label & S-Label\\
+\hline
+Only typical s/ʃ & 89.7\% (7.3\%) & 89.9\% (5.8\%)\\
+\hline
+\end{tabular}
+\end{table}

@@ -1,0 +1,14 @@
+\begin{table}[t]
+
+\caption{\label{tab:acc:exp5}Transcription accuracy (Experiment 5)}
+\centering
+\begin{tabular}{l|r|r}
+\hline
+  & 	extesh-Label & S-Label\\
+\hline
+Difficulty during & 70.6\% (14.1\%) & 63.4\% (15.6\%)\\
+\hline
+Difficulty after & 68.7\% (15.4\%) & 70.1\% (11.6\%)\\
+\hline
+\end{tabular}
+\end{table}

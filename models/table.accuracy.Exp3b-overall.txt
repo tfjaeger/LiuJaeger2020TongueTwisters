@@ -1,0 +1,14 @@
+\begin{table}[t]
+
+\caption{\label{tab:acc:exp3b}Transcription accuracy (Experiment 3b)}
+\centering
+\begin{tabular}{l|r|r}
+\hline
+  & 	extesh-Label & S-Label\\
+\hline
+Sober state & 86.7\% (6.8\%) & 80.9\% (14.1\%)\\
+\hline
+Intoxicated state & 83.8\% (10.8\%) & 83.8\% (10\%)\\
+\hline
+\end{tabular}
+\end{table}

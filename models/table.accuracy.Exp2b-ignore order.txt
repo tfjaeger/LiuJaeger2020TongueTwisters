@@ -1,0 +1,12 @@
+\begin{table}[t]
+
+\caption{\label{tab:acc:exp2b}Transcription accuracy (Experiment 2b)}
+\centering
+\begin{tabular}{l|r|r}
+\hline
+  & 	extesh-Label & S-Label\\
+\hline
+No s/ʃ & 91\% (5.6\%) & 91\% (5.6\%)\\
+\hline
+\end{tabular}
+\end{table}

@@ -1,0 +1,14 @@
+\begin{table}[t]
+
+\caption{\label{tab:acc:exp3a}Transcription accuracy (Experiment 3a)}
+\centering
+\begin{tabular}{l|r|r}
+\hline
+  & 	extesh-Label & S-Label\\
+\hline
+Non-tongue twister & 75.2\% (16.3\%) & 81.3\% (11.2\%)\\
+\hline
+Tongue twister & 73.6\% (14.9\%) & 78.5\% (13.4\%)\\
+\hline
+\end{tabular}
+\end{table}

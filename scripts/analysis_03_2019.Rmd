@@ -1,0 +1,1785 @@
+---
+title: "Supplementary information for *Talker-specific pronunciation or speech error? Discounting (or not) atypical pronunciations during speech perception*"
+author: "Linda Liu and Florian Jaeger"
+date: \today
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{siunitx}
+  - \usepackage{tabto}
+  - \usepackage{soul}
+  - \usepackage{xcolor}
+  - \usepackage{placeins}
+  - \usepackage{lscape}
+  - \newcommand{\blandscape}{\begin{landscape}}
+  - \newcommand{\elandscape}{\end{landscape}}
+  - \makeatletter\renewcommand{\fps@table}{!ht}\makeatother
+  - \setstcolor{red}
+  - \usepackage{sectsty}
+  - \sectionfont{\color{blue}} 
+  - \subsectionfont{\color{blue}}
+  - \subsubsectionfont{\color{darkgray}}
+output:
+  pdf_document:
+    latex_engine: xelatex
+    fig_caption: true
+    toc: true
+    toc_depth: 4
+    number_sections: true
+  fontsize: 9pt
+  geometry: margin=1.5cm
+---
+
+
+```{r setup, include=FALSE, cache=F}
+library(plyr)
+library(tidyverse)
+library(magrittr)
+library(lme4)
+library(lmerTest)
+library(Cairo)
+library(stringdist)
+library(gtools)
+library(brms)
+
+options(width = 95)
+
+knitr::opts_chunk$set(dev = 'pdf',
+               comment="", 
+               echo=TRUE, warning=FALSE, message=TRUE,
+               cache=TRUE, 
+               fig.width = 8, fig.height = 4.5, fig.align = "center")
+
+knitr::knit_hooks$set(document = function(x) {sub('\\usepackage[]{color}', '\\usepackage{xcolor}', x, fixed = TRUE)})
+color_block = function(color) { function(x, options) sprintf('\\color{%s}\\begin{verbatim}%s\\end{verbatim}\\color{black}', color, x) }
+knitr::knit_hooks$set(error = color_block('red'))
+knitr::knit_hooks$set(warning = color_block('orange'))
+# def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+# knitr::knit_hooks$set(chunk = function(x, options) {
+#   x <- def.chunk.hook(x, options)
+#   ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+# })
+
+theme_set(theme_bw(base_size = 11))
+```
+
+
+```{r, functions etc, include=FALSE}
+## --------------------------------------------------------------------------------------------------
+# CONSTANTS
+## --------------------------------------------------------------------------------------------------
+color.s = "red"
+color.sh = "blue"
+color.filler = "gray"
+color.TT = "white"
+color.nonTT = "black"
+color.filler = "gray"
+lt.TT = 2
+lt.nonTT = 1
+shape.TT = 19
+shape.nonTT = 17
+
+
+## --------------------------------------------------------------------------------------------------
+# FUNCTIONS
+## --------------------------------------------------------------------------------------------------
+source("../scripts/functions.R")
+
+
+myCenter = function(x) {
+  return(x - mean(x, na.rm =T))
+}
+
+
+prepVars = function(data) {
+  data = data %>%
+    droplevels() %>%
+    mutate_at(c("RandomID", "Condition", "Cond", "Context", "Label"),
+              .funs = factor)
+  
+  # If exposure data
+  if ("ItemContext" %in% colnames(data))
+    data %<>%
+      mutate(ItemContext = factor(ItemContext)) 
+  
+  # If test data
+  if ("Step" %in% colnames(data))
+    data %<>% mutate(
+      cStep = myCenter(Step),
+      cAcc = myCenter(Accuracy.bySubject),
+      cAcc.ST = myCenter(Accuracy.ShiftedTarget.bySubject),
+      cAcc.NO = myCenter(Accuracy.noOrder.bySubject),
+      cAcc.el = myCenter(Accuracy.bySubject.emplogit),
+      cAcc.ST.el = myCenter(Accuracy.ShiftedTarget.bySubject.emplogit),
+      cAcc.NO.el = myCenter(Accuracy.noOrder.bySubject.emplogit),      
+      Trial = TrialBin.first,
+      ResponseSH = ifelse(Response == "SH", 1, 0)
+    )
+  
+  if (nlevels(data$Label) == 2) {
+    contrasts(data$Label) = contr.sum(2)     
+    colnames(contrasts(data$Label)) <- c("SH vs S")
+  }
+  
+  if (nlevels(data$Context) == 2) {
+    contrasts(data$Context) = contr.sum(2)     
+    colnames(contrasts(data$Context)) <- c("notTT vs TT")
+  }
+  
+  if (nlevels(data$Condition) == 2) {
+    contrasts(data$Condition) = contr.sum(2)     
+    colnames(contrasts(data$Condition)) <- paste(levels(data$Condition), collapse = " vs.")
+  }
+
+  if (nlevels(data$Cond) == 2) {
+    contrasts(data$Cond) = contr.sum(2)     
+    colnames(contrasts(data$Cond)) <- paste(substr(levels(data$Cond), 1, 5), collapse = " vs.")
+  }
+
+  return(data)
+}
+
+
+accuracyTable = function(data, experiment, which = c("overall", "ignore order", "shifted only")[1], format = "latex", save = T, print = T) {
+  require(knitr)
+  
+  d.temp = data %>% 
+    filter(Experiment %in% experiment) %>%
+    prepVars()
+  
+  if (which == "overall") {
+    d.temp %<>% gather(key = "WordPosition", value = "Correct", 
+                       "Correct1", "Correct2", "Correct3", "Correct4") %>%
+      dplyr::select("Correct", "Cond", "Label", "RandomID", "ItemContext")
+  } else if (which == "ignore order") {
+    d.temp %<>% gather(key = "WordPosition", value = "Correct", 
+                       "Correct1.noOrder", "Correct2.noOrder", "Correct3.noOrder", "Correct4.noOrder") %>%
+      dplyr::select("Correct", "Cond", "Label", "RandomID", "ItemContext")
+  } else if (which == "shifted only") {
+    d.temp %<>% 
+      dplyr::select("Correct3.Critical", "Cond", "Label", "RandomID", "ItemContext") %>%
+      dplyr::rename(Correct = Correct3.Critical)
+  } else F
+  
+  d.temp %<>%
+    group_by(Cond, Label, RandomID) %>% 
+    summarise(Correct = mean(Correct*100, na.rm = T)) %>%
+    group_by(Cond, Label) %>%
+    summarise(mean = round(mean(Correct), 1), sd = round(sd(Correct), 1)) %>%
+    ungroup()
+  
+  if(nlevels(d.temp$Label) >= 2) {
+    m = d.temp %>% 
+      select(-"sd") %>%
+      spread(key = "Label", value = "mean") %>%
+      droplevels()
+    
+    s = d.temp %>% 
+      select(-"mean") %>%
+      spread(key = "Label", value = "sd") %>%
+      droplevels()
+    
+    ms = matrix(paste0(
+      m %>% 
+        select(-"Cond") %>% 
+        as.matrix(), 
+      "% (", 
+      s %>% 
+        select(-"Cond") %>% 
+        as.matrix(), 
+      "%)"),
+      ncol = 2,
+      nrow = nlevels(m$Cond))
+    
+    colnames(ms) = c("\textesh-Label", "S-Label")
+    rownames(ms) = paste(levels(m$Cond))
+    
+    k = kable(ms, format = format, digits = c(1,1), 
+              caption = paste0("Transcription accuracy (Experiment ", paste0(experiment, collapse = ", "), ")"), align = c("r", "r"),
+              label = paste0("acc:exp", paste0(experiment, collapse = ".")))
+    
+    
+    if (print) {
+      print(kable(ms, format = "markdown", digits = c(1,1), 
+                  caption = paste0("Transcription accuracy (Experiment ", paste0(experiment, collapse = ", "), ")"), align = c("r", "r"),
+                  label = paste0("acc:exp", paste0(experiment, collapse = "."))))
+    }
+    
+    if (save) {
+      sink(file = paste0("../models/table.accuracy.Exp", experiment, "-", which, ".txt"))
+      print(kable(ms, format = format, digits = c(1,1), 
+                  caption = paste0("Transcription accuracy (Experiment ", paste0(experiment, collapse = ", "), ")"), align = c("r", "r"),
+                  label = paste0("acc:exp", paste0(experiment, collapse = "."))))
+      sink()
+    }
+    
+  } else k = d.temp
+  
+  return(k)
+}
+
+
+
+exposureModel = function(data, experiment, which = c("overall", "ignore order", "shifted only")[1], print = T, load = T, save = T) {
+  require(lme4)
+  filename = paste0("../models/m.accuracy.Exp", experiment, "-", which, ".rds")
+                    
+  # If load (defaul) and file exist, load it. Otherwise fit model.
+  if (load & file.exists(filename)) {
+        g = readRDS(filename)
+  } else {
+    d.temp = data %>% 
+      filter(Experiment %in% experiment) %>%
+      prepVars()
+    
+    if (which == "overall") {
+      d.temp %<>% gather(key = "WordPosition", value = "Correct", 
+                         "Correct1", "Correct2", "Correct3", "Correct4") %>%
+        dplyr::select("Correct", "Cond", "Label", "RandomID", "ItemContext")
+    } else if (which == "ignore order") {
+      d.temp %<>% gather(key = "WordPosition", value = "Correct", 
+                         "Correct1.noOrder", "Correct2.noOrder", "Correct3.noOrder", "Correct4.noOrder") %>%
+        dplyr::select("Correct", "Cond", "Label", "RandomID", "ItemContext")
+    } else if (which == "shifted only") {
+      d.temp %<>% 
+        dplyr::select("Correct3.Critical", "Cond", "Label", "RandomID", "ItemContext") %>%
+        dplyr::rename(Correct = Correct3.Critical)
+    } else F
+    
+    if (nlevels(d.temp$Cond) < 2) {
+      g = glmer(Correct ~ 1 + Label +
+                  (1 | RandomID) + (1 + Label | ItemContext),
+                family = "binomial",
+                data = d.temp, control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))
+      )
+    } else {
+      g = glmer(Correct ~ 1 + Cond * Label +
+                  (1 | RandomID) + (1 + Cond * Label | ItemContext),
+                family = "binomial",
+                data = d.temp, control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))
+      )
+    }
+  } 
+  
+  # If save (default) save model.
+  if (save) {
+    saveRDS(g, file = filename, compress = T)
+  }
+  
+  if (print) {
+    print(knitr::kable(coef(summary(g)), digits = c(2, 2, 2, 4), caption = paste("Experiment", experiment)))
+  }
+
+  
+  return(g)
+}
+
+
+testModel = function(data, 
+                     experiment, 
+                     includeTrial = T, 
+                     control = c("", "overall", "ignore order", "shifted only")[1], 
+                     print = T, load = T, save = T) {
+  require(tidyverse)
+  require(lme4)
+  
+  filename = paste0("../models/m.test.Exp", paste(experiment, collapse="+"))
+  if (includeTrial) 
+    filename = paste0(filename, "-withTrial")
+  if (control != "")
+    filename = paste0(filename, "-withAccControl_", control)
+  filename = paste0(filename, ".rds")
+                    
+  # If load (default) and file exist, load it. Otherwise fit model.
+  if (load & file.exists(filename)) {
+        g = readRDS(filename)
+  } else {
+    d.temp = data %>% 
+      filter(Experiment %in% experiment) %>%
+      prepVars() 
+    
+    if (nlevels(d.temp$Cond) >= 2) {
+      CondString = "* Cond"
+    } else CondString = ""
+    
+    if (includeTrial)  TrialString = "* Trial" else TrialString = ""
+    
+    if (control == "overall") {
+      AccuracyString = "* cAcc.el" # "Accuracy.bySubject.emplogit"
+    } else if (control == "ignore order") {
+      AccuracyString = "* cAcc.NO.el" # "Accuracy.noOrder.bySubject.emplogit"
+    } else if (control == "shifted only") {
+      AccuracyString = "* cAcc.ST.el" # "Accuracy.ShiftedTarget.bySubject.emplogit"
+    } else AccuracyString = ""
+    
+    f = formula(paste0("ResponseSH ~ Label ", CondString, TrialString, AccuracyString, "+ (1 | RandomID)"))
+    g = glmer(formula = f, family = "binomial", data = d.temp,
+              control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+  } 
+  
+  # If save (default) save model.
+  if (save) {
+    saveRDS(g, file = filename, compress = T)
+  }
+  
+  if (print) {
+    print(knitr::kable(coef(summary(g)), digits = c(2, 2, 2, 4), caption = paste("Experiment", experiment)))
+  }
+
+  return(g)
+}
+
+
+plotCategorizationCurve = function(d, experiment, save = T, panelBy) {
+  require(tidyverse)
+  require(magrittr)
+  
+  panelBy = enquo(panelBy)
+
+  d %<>%
+    filter(Experiment %in% experiment) %>%
+    mutate_at(c("Condition", "Label"), .funs = factor) %>%
+    droplevels() %>% 
+    group_by(Experiment, Experiment.long, RandomID, Step, Label, Condition, Cond, Context) %>%
+    dplyr::summarise(MeanResponse = mean(ifelse(Response == "SH", 1, 0)))
+  
+  p = d %>% 
+    ggplot(., aes(x = Step, y = MeanResponse, color=Label, shape=Label, group=Context:Label)) +
+    stat_summary(fun.y = mean, geom = "line", size = 1, aes(linetype = Context)) +
+    stat_summary(fun.data = mean_cl_boot, geom = "linerange", alpha = .5, size = 1.5) + 
+    stat_summary(fun.y = mean, geom = "point", size = 3) +
+    scale_color_manual("Label",
+                         breaks = if(nlevels(d$Label) == 2) c("ʃ-Label", "S-Label") else c("ʃ-Label", "S-Label", "filler"),
+                         labels = if(nlevels(d$Label) == 2) c("ʃ", "s") else c("ʃ", "s", "filler"),
+                         values = if(nlevels(d$Label) == 2) c(color.sh, color.s) else c(color.sh, color.s, color.filler)) +
+    scale_shape_discrete("Label",
+                         breaks = if(nlevels(d$Label) == 2) c("ʃ-Label", "S-Label") else c("ʃ-Label", "S-Label", "filler"),
+                         labels = if(nlevels(d$Label) == 2) c("ʃ", "s") else c("ʃ", "s", "filler")) +
+    scale_linetype_manual("Context",
+                         breaks = c("TT", "non-TT"),
+                         labels = c("Tongue\ntwister", "Non-tongue\ntwister"),
+                         values = if(nlevels(d$Context) == 2) c(lt.TT,lt.nonTT) else { if (unique(d$Context) == "TT") lt.TT else lt.nonTT },
+                         guide = if(nlevels(d$Context) == 2) "legend" else "none") +
+    scale_x_continuous("Continuum Steps",
+                     breaks = c(13,15,16,17,18,19,21),
+                     labels=c("Most s-like","","","","", "", "Most ʃ-like")) + 
+    scale_y_continuous("Proportion of /ʃ/ responses") + 
+    theme(
+      panel.grid.minor.x = element_blank(), 
+      legend.position = "bottom", legend.box = "vertical", legend.key.width = unit(1.5, "cm"),
+      axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  if (quo_name(panelBy) %in% names(d)) 
+    p = p + facet_wrap(vars(!!panelBy))
+  
+  if (save) 
+    ggsave(p, 
+           filename = 
+             paste0("../figures/Experiment ", 
+                    gsub("/", " ", paste(experiment, collapse = "+")), 
+                    " - categorization curve.pdf"),
+           width = 3.5 * nlevels(ggplot_build(p)$data[[1]]$PANEL) + .5, 
+           height = 6, device = cairo_pdf)
+  
+  return(p)
+}
+
+
+plotCategorizationOverTrials = function(data, experiment, labels = NULL, order = NULL, save = T) {
+  require(tidyverse)
+  require(magrittr)
+  
+  if (is.null(order)) order = 1:nlevels(data$Cond)
+  
+  data %<>%
+    filter(Experiment %in% experiment) %>%
+    mutate_at(c("Condition", "Label"), .funs = factor) %>%
+    droplevels() %>% 
+    group_by(RandomID, Experiment.long, Label, Condition, Cond, Context, TrialBin) %>%
+    dplyr::summarise(MeanResponse = emplog(mean(ifelse(Response == "SH", 1, 0)), length(Response))) %>%
+    ungroup() %>%
+    mutate(Cond = factor(if (!is.null(labels)) 
+      mapvalues(Cond,
+                labels[[1]],
+                labels[[2]]) 
+      else paste0(Cond, "\n(Experiment ", gsub("\\(", " - ", gsub("(\\n|\\))", "", Experiment.long)), ")"))) %>%
+    mutate(Cond = factor(Cond, levels = levels(Cond)[order]))
+  
+  p = data %>% 
+    ggplot(., aes(x = TrialBin, y = MeanResponse, color=Label, shape=Label)) +
+    geom_hline(yintercept = 0, linetype = 2, color = "black") +
+    stat_summary(fun.data = mean_cl_boot, geom = "linerange", alpha = .5, size = 1.5) + 
+    stat_summary(fun.y = mean, geom = "point", size = 3) +
+    geom_smooth(method = "lm") +
+    scale_color_manual(
+      "Label",
+      breaks = if(nlevels(data$Label) == 2) c("ʃ-Label", "S-Label") else c("ʃ-Label", "S-Label", "filler"),
+      labels = if(nlevels(data$Label) == 2) c("ʃ", "s") else c("ʃ", "s", "filler"),
+      values = if(nlevels(data$Label) == 2) c(color.sh, color.s) else c(color.sh, color.s, color.filler)) +
+    scale_shape_discrete(
+      "Label",
+      breaks = if(nlevels(data$Label) == 2) c("ʃ-Label", "S-Label") else c("ʃ-Label", "S-Label", "filler"),
+      labels = if(nlevels(data$Label) == 2) c("ʃ", "s") else c("ʃ", "s", "filler")) +
+    scale_x_continuous("Trial bin") + 
+    scale_y_continuous("Empirical logits of /ʃ/ responses") + 
+    facet_wrap(~ Cond) +
+    coord_cartesian(ylim = c(-1.5, 1.1)) +
+    theme(
+      panel.grid.minor.x = element_blank(), 
+      legend.position = "bottom", legend.box = "vertical", legend.key.width = unit(1.5, "cm")
+    )
+  
+  if (save) 
+    ggsave(p, 
+           filename = 
+             paste0("../figures/Experiment ", 
+                    gsub("/", " ", paste(experiment, collapse = "+")), 
+                    " - categorization over trials.pdf"),
+           width = 3.5 * nlevels(ggplot_build(p)$data[[1]]$PANEL) + .5, 
+           height = 6, device = cairo_pdf)
+  
+  return(p)
+}
+```
+
+# Load data, declare and format variables
+```{r, load data, include=FALSE}
+# Item code: The first number indicates the context. If it ends in a,b, it contains 3 unshifted sounds.
+#            The second number indicates the target. If it ends in a,b, it is shifted (unless followed by "unshifted" for Exp 2)/.
+#            So critical tongue twisters are Xa or Xb and fillers are Y.
+#
+# 
+# X{a,b}:                   3 unshifted, 1 shifted,       TT target in     TT context ("CRITICAL") used for shifted and typical, TT
+# X{a,b}_Y:                 3 unshifted, 1 unrelated, non-TT target in     TT context ("TYPICAL")  used for typical, non-TT
+# Y_X{a,b}:                 3 unrelated, 1 shifted,   non TT-target in non-TT context ("CRITICAL") used for shifted, non-TT
+# Y_X{a,b}_unschifted:      3 unrelated, 1 unshifted, non-TT target in non-TT context ("TYPICAL")  used only in Exp 2
+# Y:                        4 unrelated               non-TT target in non-TT context ("FILLER")   used as filler
+
+d.exp.test = readRDS("../data/test.RDS")
+d.exp.test.norejects = d.exp.test %>%
+  filter(Reject == 0) %>%
+  mutate(
+    Experiment = factor(case_when(
+      Condition %in% c("TT", "notTT") ~ "1",
+      Condition %in% c("notTT_unshifted") ~ "2",
+      Condition %in% c("none") ~ "2b", 
+      Condition %in% c("notTTspeed30", "TTspeed30") ~ "3a",
+      Condition %in% c("drunk", "sober") ~ "3b",
+      Condition %in% c("notTTspeed30short4", "TTspeed30short4") ~ "4b",
+      Condition %in% c("TTspeed30struggleshort4", "TTspeed30struggleaftershort4") ~ "5",
+      Condition %in% c("notTTredo1") ~ "1b",
+      T ~ NA_character_
+    )),
+    Experiment.long = factor(case_when(
+      Condition %in% c("TT", "notTT") ~ "1\n",
+      Condition %in% c("notTT_unshifted") ~ "2\n(typical s/ʃ)",
+      Condition %in% c("none") ~ "2b\n(no s/ʃ)", 
+      Condition %in% c("notTTspeed30", "TTspeed30") ~ "3a\n(faster speechrate)",
+      Condition %in% c("drunk", "sober") ~ "3b\n(alleged intoxication)",
+      Condition %in% c("notTTspeed30short4", "TTspeed30short4") ~ "4b\n(best stimuli)",
+      Condition %in% c("TTspeed30struggleshort4", "TTspeed30struggleaftershort4") ~ "5\n(overt disfluency)",
+      Condition %in% c("notTTredo1") ~ "1b\n(more extreme shifts)",
+      T ~ NA_character_
+    )),
+    Label = factor(mapvalues(Label, 
+                             from = c("sh", "s"),
+                             to = c("ʃ-Label", "S-Label")), 
+                   levels = c("ʃ-Label", "S-Label", "filler")),
+    Context = factor(
+      case_when(
+        Condition %in% c("TT", "TTspeed30", "TTspeed30short4", "TTspeed30struggleshort4", "TTspeed30struggleaftershort4") ~ "TT",
+        Condition %in% c("notTT", "notTT_unshifted", "none", "notTTspeed30", "notTTspeed30short4","drunk", "sober", "notTTredo1") ~ "non-TT",
+        T ~ NA_character_
+        ), levels = c("non-TT", "TT")),
+    Cond = factor(
+      case_when(
+        Condition %in% c("TT", "TTspeed30", "TTspeed30short4") ~ "Tongue twister",
+        Condition %in% c("notTT", "notTTspeed30", "notTTspeed30short4") ~ "Non-tongue twister",
+        Condition %in% c("notTT_unshifted") ~ "Only typical s/ʃ",
+        Condition %in% c("none") ~ "No s/ʃ", 
+        Condition %in% c("drunk") ~ "Intoxicated state",
+        Condition %in% c("sober") ~ "Sober state",
+        Condition %in% c("TTspeed30struggleshort4") ~ "Difficulty during",
+        Condition %in% c("TTspeed30struggleaftershort4") ~ "Difficulty after",
+        Condition %in% c("notTTredo1") ~ "More extreme shifts", 
+        T ~ NA_character_
+    ), levels = c("Non-tongue twister",
+                  "Only typical s/ʃ", "No s/ʃ",
+                  "Sober state", "Intoxicated state", 
+                  "Tongue twister", 
+                  "Difficulty during", "Difficulty after")),
+    TrialBin.first = TrialBin - 1
+  )
+
+d.exp.exposure = readRDS("../data/exposure.RDS")
+d.exp.exposure.norejects = d.exp.exposure %>%
+    filter(Reject == 0) %>%
+    mutate(
+    Experiment = factor(case_when(
+      Condition %in% c("TT", "notTT") ~ "1",
+      Condition %in% c("notTT_unshifted") ~ "2",
+      Condition %in% c("none") ~ "2b", 
+      Condition %in% c("notTTspeed30", "TTspeed30") ~ "3a",
+      Condition %in% c("drunk", "sober") ~ "3b",
+      Condition %in% c("notTTspeed30short4", "TTspeed30short4") ~ "4b",
+      Condition %in% c("TTspeed30struggleshort4", "TTspeed30struggleaftershort4") ~ "5",
+      Condition %in% c("notTTredo1") ~ "1b",
+      T ~ NA_character_
+    )),
+    ShortFilename = gsub("speed30/|struggle/|struggleafter/|redo1/|_unshifted", "", Filename),
+    ItemContext = gsub("^([0-9]+)[ab._].*$", "\\1", ShortFilename),
+    Label = factor(mapvalues(Label, 
+                             from = c("sh", "s"),
+                             to = c("ʃ-Label", "S-Label")), 
+                   levels = c("ʃ-Label", "S-Label", "filler")),
+    Context = factor(
+      case_when(
+        Condition %in% c("TT", "TTspeed30", "TTspeed30short4", "TTspeed30struggleshort4", "TTspeed30struggleaftershort4") ~ "TT",
+        Condition %in% c("notTT", "notTT_unshifted", "none", "notTTspeed30", "notTTspeed30short4","drunk", "sober", "notTTredo1") ~ "non-TT",
+        T ~ NA_character_
+        ), levels = c("non-TT", "TT")),
+        Cond = factor(
+      case_when(
+        Condition %in% c("TT", "TTspeed30", "TTspeed30short4") ~ "Tongue twister",
+        Condition %in% c("notTT", "notTTspeed30", "notTTspeed30short4") ~ "Non-tongue twister",
+        Condition %in% c("notTT_unshifted") ~ "Only typical s/ʃ",
+        Condition %in% c("none") ~ "No s/ʃ", 
+        Condition %in% c("drunk") ~ "Intoxicated state",
+        Condition %in% c("sober") ~ "Sober state",
+        Condition %in% c("TTspeed30struggleshort4") ~ "Difficulty during",
+        Condition %in% c("TTspeed30struggleaftershort4") ~ "Difficulty after",
+        Condition %in% c("notTTredo1") ~ "More extreme shifts", 
+        T ~ NA_character_
+    ), levels = c("Non-tongue twister",
+                  "Only typical s/ʃ", "No s/ʃ",
+                  "Sober state", "Intoxicated state", 
+                  "Tongue twister", 
+                  "Difficulty during", "Difficulty after"))
+  ) 
+
+d.exp.survey = readRDS("../data/survey.RDS")
+d.exp.survey.norejects = d.exp.survey %>%
+  filter(Reject == 0) %>%
+  mutate(
+    Experiment = factor(case_when(
+      Condition %in% c("TT", "notTT") ~ "1",
+      Condition %in% c("notTT_unshifted") ~ "2",
+      Condition %in% c("none") ~ "2b", 
+      Condition %in% c("notTTspeed30", "TTspeed30") ~ "3a",
+      Condition %in% c("drunk", "sober") ~ "3b",
+      Condition %in% c("notTTspeed30short4", "TTspeed30short4") ~ "4b",
+      Condition %in% c("TTspeed30struggleshort4", "TTspeed30struggleaftershort4") ~ "5",
+      Condition %in% c("notTTredo1") ~ "1b",
+      T ~ NA_character_
+    ))
+  )
+
+d.ttnorm.resp = readRDS("../data/likert.RDS")
+d.ttnorm.resp.norejects = d.ttnorm.resp %>%
+  filter(Reject == 0) %>%
+  mutate(
+    Item = gsub("b.wav", "", gsub("a.wav", "", Filename))
+  )
+
+d.rating.resp = readRDS("../data/rating.RDS")
+d.rating.resp.norejects = subset(d.rating.resp, Reject == 0) %>%
+dplyr::rename(
+    "CorrectResponse1" = "CorrectWord1",
+    "CorrectResponse2" = "CorrectWord2",
+    "CorrectResponse3" = "CorrectWord3",
+    "CorrectResponse4" = "CorrectWord4",
+    "CorrectResponse1to4" = "CorrectResponse"
+  ) 
+
+# Some sanity checks
+# d.exp.exposure.norejects %>%
+#   group_by(RandomID, Condition, Label) %>%
+#   dplyr::summarise(n_perSubj = length(RandomID)) %>%
+#   group_by(Condition, Label) %>%
+#   dplyr::summarise(
+#     n_perSubj = first(n_perSubj),
+#     n_perCond = length(RandomID))
+# 
+# d.exp.exposure.norejects %>%
+#   filter(Experiment == "2") %>%
+#   group_by(RandomID, Condition, Label) %>%
+#   summarise() %>%
+#   group_by(Condition, Label) %>%
+#   count()
+# d.exp.exposure.norejects %>%
+#   filter(Experiment == "2", Label == "filler") 
+
+```
+
+
+```{r, compute exposure block accuracy, include=FALSE}
+Response1 = c()
+Response2 = c()
+Response3 = c()
+Response4 = c()
+
+d.exp.exposure.norejects$Temp = strsplit(tolower(gsub('[[:punct:]]', '', d.exp.exposure.norejects$Response)), " ")
+
+#Basically split up the transcription into four words
+for (i in d.exp.exposure.norejects$Temp) {
+  if (length(i) < 4) {
+    i = c(i, rep(NA, 4-length(i)))
+  }
+    Response1 = c(Response1, i[1])
+    Response2 = c(Response2, i[2])
+    Response3 = c(Response3, i[3])
+    Response4 = c(Response4, i[4])
+}
+
+#List compiled by RA of common misspellings
+filemapping = read.csv("../data/filemapping_gold.csv", sep = ",")
+d.exp.exposure.norejects = data.frame(d.exp.exposure.norejects,
+      Response1 = Response1,
+      Response2 = Response2,
+      Response3 = Response3,
+      Response4 = Response4)
+
+d.exp.exposure.norejects %<>%
+  left_join(filemapping) %>%
+  dplyr::rename(
+    "CorrectResponse1" = "CorrectWord1",
+    "CorrectResponse2" = "CorrectWord2",
+    "CorrectResponse3" = "CorrectWord3",
+    "CorrectResponse4" = "CorrectWord4"
+  ) %>% 
+  mutate(
+    CorrectResponse1to4 = paste(CorrectResponse1, CorrectResponse2, CorrectResponse3, CorrectResponse4, sep = "|"),
+    # LL: Check spelling against list (not really worth it above and beyond edit distance)
+    Correct1 = ifelse(mapply(grepl, pattern=CorrectResponse1, x=Response1), 1, 0),
+    Correct2 = ifelse(mapply(grepl, pattern=CorrectResponse2, x=Response2), 1, 0),
+    Correct3 = ifelse(mapply(grepl, pattern=CorrectResponse3, x=Response3), 1, 0),
+    Correct4 = ifelse(mapply(grepl, pattern=CorrectResponse4, x=Response4), 1, 0),
+    # Ignoring word order
+    Correct1.noOrder = ifelse(mapply(grepl, pattern=CorrectResponse1to4, x=Response1), 1, 0),
+    Correct2.noOrder = ifelse(mapply(grepl, pattern=CorrectResponse1to4, x=Response2), 1, 0),
+    Correct3.noOrder = ifelse(mapply(grepl, pattern=CorrectResponse1to4, x=Response3), 1, 0),
+    Correct4.noOrder = ifelse(mapply(grepl, pattern=CorrectResponse1to4, x=Response4), 1, 0),
+    Correct3.Critical = ifelse(ThirdWord != "Filler" & Experiment %in% c("1", "1b", "3a", "3b", "4b", "5"), 
+      # Does the critical word occur anywhere in the transcription? (only for non-filler critical words)
+      ifelse(mapply(grepl, pattern=CorrectResponse3, x=Response), 1, 0),    
+      NA
+    )
+  ) 
+
+# Add proportion correct to each trial
+d.exp.exposure.norejects %<>% 
+  left_join(d.exp.exposure.norejects %>%
+              group_by(RandomID, Label, Condition, Trial) %>%
+              dplyr::summarise(
+                PropCorrect = mean((Correct1 + Correct2 + Correct3 + Correct4) / 4),
+                PropCorrect.noOrder = mean((Correct1.noOrder + Correct2.noOrder + Correct3.noOrder + Correct4.noOrder) / 4)
+              )
+  ) %>%
+  # Remove regular expression patterns from correct response variables (for ease of read of data.frame)
+  mutate_at(
+    .vars = vars(starts_with("CorrectResponse")), .funs = function(x) gsub("^([a-zA-Z]+)\\|.*$", "\\1", x)
+  ) %>%
+  mutate(
+    CorrectResponse1to4 = paste(CorrectResponse1, CorrectResponse2, CorrectResponse3, CorrectResponse4),
+    Temp = NULL
+  ) 
+
+exp.accuracies = d.exp.exposure.norejects %>% 
+  group_by(Experiment, RandomID) %>%
+  dplyr::summarise(
+    Accuracy.bySubject = mean(PropCorrect),
+    Accuracy.bySubject.emplogit = emplog(Accuracy.bySubject, length(RandomID) * 4),
+    Accuracy.noOrder.bySubject = mean(PropCorrect.noOrder),
+    Accuracy.noOrder.bySubject.emplogit = emplog(Accuracy.noOrder.bySubject, length(RandomID) * 4),
+    Accuracy.ShiftedTarget.bySubject = mean(Correct3.Critical, na.rm = T), # Consider critical word correct if transcribed in any order
+    Accuracy.ShiftedTarget.bySubject.emplogit = emplog(Accuracy.ShiftedTarget.bySubject, length(RandomID) * 4)
+  )
+
+d.exp.test.norejects %<>% left_join(exp.accuracies)
+
+```
+
+## Overview of different data files
+
+All data and scripts are available at https://osf.io/ungba/.
+
+1. Perceptual recalibration experiments. All of these use the same number of successful participants per condition. The data from all experiments has been combined into one file each for the exposure block (exposure.RDS; transcription accuracy), test block (test.RDS; categorization responses), and post-experiment survey (survey.RDS). Description of Condition column: 
+    + **Experiment 1:** notTT (Non Tongue Twister), TT (Tongue Twister): 8 critical trials
+    + **Experiment 2:** notTT_unshifted (Non Tongue Twister with unshifted S/SH words)
+    + **Experiment 3b:** drunk, sober (Both paired with Tongue Twister Stims, 8 critical trials)
+    + **Experiment 3a:** TTspeed30, notTTspeed30 (8 critical trials, speed up by 30%)
+    + **Experiment 4b:** TTspeed30short4, notTTspeed30short4 (4 critical trials, sped up by 30%)
+    + **Experiment 5 (Difficulty during):** TTspeed30struggleshort4 (4 critical trials, sped up 30%, stutter on third word with repair)
+    + **Experiment 5 (Difficulty after):** TTspeed30struggleaftershort4 (4 critical trials, sped up 30%, sound of frustration after shifted word)
+    + **Auxiliary Experiment 1b:** notTTredo1 (Non Tongue Twister with critical words shifted further towards the opposite category)
+    + **Auxiliary Experiment 2b:** none (8 critical trials, all normal pronunciations)
+
+2. Additionally, we conducted two norming experiments.
+    + How tongue twister-like were the stimuli? Likert scale from 1-7 (likert.RDS). This is **Experiment 4a**.
+    + Did the talker have trouble producing this phrase? 2AFC, yes or no? (rating.RDS). This is **Experiment 5b**.
+
+## Notes on variable coding (READ THIS FIRST)
+As described in the paper, all binary categorical predictors were 1/-1 sum/ANOVA coded and output is labeled such that "CondA vs. B"" means that A was coded as 1 and B as -1. The 3-way context comparison between the two conditions of Experiment 5 and the Non-Tongue Twister condition of Experiment 1 uses treatment coding: each of the two conditions with overt production difficulty ("during" and "after") of Experiment 5 is compared against the baseline Non-Tongue Twister condition of Experiment 1.
+
+All analyses in which trial is included code Trial as 0 for the first trial bin during test (and then 1, ..., 4). Measures of by-particpant exposure accuracy were always centered before adding them to the control analyses of the categorization responses during the test block.
+
+
+
+
+
+
+# Exposure Block
+
+In this section, we summarize the accuracy of transcriptions in the exposure block. We describe three different accuracy measures. The first two measures capture the overall acuracy of transcriptions---either counting mistakes in the word order as mistakes or not. The third measure captures the accuracy of only the critical shifted words (eight in Experiments 1, 3a, and 3b; four in Experiments 4b and 5; Experiment 2 contained no shifted words). Like the second measure of overall accuracy, this measure was *not* order sensitive. That is, we counted the transcription as correct if the critical shifted token was part of the transcription response, regardless of whether it had been transcribed as occurring the third position. 
+
+In the paper, we report only the two order insensitive accuracy measures (one measure for overall accuracy and one measure for the accuracy of the critical shifted token). The motivation for this is that we are interested in a measure that approximates whether participants heard and processed the words, not in whether their verbal recall during transcription function correctly. 
+
+**Reproducibility note:** When we first submitted the manuscript for review we had only measured and analyzed the order *sensitive* overall accuracy. It was reviewers' comments that made us realize this mistake, and change to analyze and report order insensitive overall accuracy. It was also reviewers' comments that made us add analyses of the accuracy for specifically the critical shifted words.
+
+
+## Plots
+```{r, accuracy plots, echo=F, warnings=F, dependson=c(-1)}
+myGplot.defaults(type = "paper")
+d.temp = d.exp.test.norejects %>%
+  filter(!(Experiment %in% c("1b", "2b"))) %>%
+  group_by(Experiment.long, Cond, Context, Label, RandomID) %>%
+  select(starts_with("Accuracy"), -ends_with("emplogit")) %>%
+  summarise_all(.funs = first) %>%
+  ungroup() 
+
+d.temp %>%
+  ggplot(
+    aes(
+      x = Cond, 
+      y = Accuracy.bySubject, 
+      color = Label, 
+      fill = Label,
+      shape = Context,
+      group = paste(Cond, Label, sep = ".")
+    )
+  ) +
+  geom_dotplot(binaxis = "y", 
+               stackdir = "center", 
+               binpositions = "bygroup", 
+               binwidth = .02,
+               dotsize = .6, alpha = .1, position = position_dodge(width = c(0,0)), 
+               aes(group = paste(Cond, Label, sep = ".")))+
+  stat_summary(fun.y = mean, geom = "point", 
+               position = position_dodge(width = c(1,.5)), size = 2.5) +
+  stat_summary(fun.data = mean_cl_boot, geom = "linerange", 
+               position = position_dodge(width = c(1,.5)), size = 1.2, alpha = .7) +
+  scale_x_discrete("") +
+  scale_y_continuous("Proportion correct transcriptions") +
+  scale_color_manual("Label",
+                    breaks = c("ʃ-Label", "S-Label"),
+                    labels = c("ʃ", "s"),
+                    values = c(color.sh, color.s)) +
+  scale_fill_manual("Label",
+                    breaks = c("ʃ-Label", "S-Label"),
+                    labels = c("ʃ", "s"),
+                    values = c(color.sh, color.s)) +
+  scale_shape_manual("Context",
+                        breaks = c("TT", "non-TT"),
+                        labels = c("Tongue Twister", "non-Tongue Twister"),
+                        values = c(shape.TT, shape.nonTT)) +
+  guides(fill = "legend", linetype = "legend") + 
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank()) +
+  coord_cartesian(ylim = c(0, 1)) + facet_grid(~ paste("Experiment", Experiment.long), space = "free_x", scales = "free_x")
+ggsave("../figures/Accuracy-overall.pdf", width = 8, height = 5.2, device = cairo_pdf)  
+
+last_plot() + aes(y = Accuracy.noOrder.bySubject) + scale_y_continuous("Proportion correct transcriptions\n(ignoring word order)") 
+ggsave("../figures/Accuracy-noOrder.pdf", width = 8, height = 5.2, device = cairo_pdf)  
+
+# Remove Experiment 2 from data set to avoid error (since it's all NA for critical shifted words)
+last_plot() %+% (d.temp %>% filter(!(Experiment.long %in% c("2\n(typical s/ʃ)")))) + aes(y = Accuracy.ShiftedTarget.bySubject) + scale_y_continuous("Proportion correctly transcribed shifted words\n") 
+ggsave("../figures/Accuracy-ShiftedTarget.pdf", width = 8, height = 5.2, device = cairo_pdf)
+```
+
+
+## Tables with averages
+
+Overall accuracy: 
+```{r, accuracy tables by experiment, echo=F}
+d.exp.exposure.norejects %>% 
+  gather(key = "WordPosition", value = "Correct", "Correct1", "Correct2", "Correct3", "Correct4") %>%
+  dplyr::select("Correct", "Experiment", "RandomID") %>%
+  group_by(Experiment, RandomID) %>% 
+  summarise(Correct = mean(Correct*100)) %>%
+  group_by(Experiment) %>%
+  summarise(mean = round(mean(Correct), 1), sd = round(sd(Correct), 1)) %>%
+  ungroup()
+```
+
+Overall accuracy ignoring word order: 
+```{r, accuracy tables by experiment ignoring word order, echo=F}
+d.exp.exposure.norejects %>% 
+  gather(key = "WordPosition", value = "Correct", "Correct1.noOrder", "Correct2.noOrder", "Correct3.noOrder", "Correct4.noOrder")  %>%
+  dplyr::select("Correct", "Experiment", "RandomID") %>%
+  group_by(Experiment, RandomID) %>% 
+  summarise(Correct = mean(Correct*100)) %>%
+  group_by(Experiment) %>%
+  summarise(mean = round(mean(Correct), 1), sd = round(sd(Correct), 1)) %>%
+  ungroup()
+```
+
+Accuracy for shifted words only:
+```{r, accuracy tables by experiment shifted words only, echo=F}
+d.exp.exposure.norejects %>% 
+  dplyr::select("Correct3.Critical", "Experiment", "RandomID") %>%
+  dplyr::rename(Correct = Correct3.Critical) %>%
+  group_by(Experiment, RandomID) %>% 
+  summarise(Correct = mean(Correct*100, na.rm = T)) %>%
+  group_by(Experiment) %>%
+  summarise(mean = round(mean(Correct), 1), sd = round(sd(Correct), 1)) %>%
+  ungroup()
+```
+
+### Experiment 1
+```{r, accuracy tables exp 1}
+m = accuracyTable(d.exp.exposure.norejects, "1", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "1", which = "ignore order")
+m = accuracyTable(d.exp.exposure.norejects, "1", which = "shifted only")
+```
+
+### Experiment 2
+Transcription accuracy was somewhat higher than in Experiment 1, presumably due to the absence of shifted words in Experiment 2. There was no difference between Label conditions.
+
+```{r, accuracy tables exp 2}
+m = accuracyTable(d.exp.exposure.norejects, "2", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "2", which = "ignore order")
+```
+
+### Experiment 3a
+Compared to Experiment 1, the overall transcription accuracy in Experiment 3a was lower by about 4-5\%. This suggests that the increased speed of the stimuli likely made the task more difficult for participants. 
+
+Participants in the SH-Label condition transcribed *fewer* words correctly than those in the S-Label condition. This is in the opposite direction from what we found in Experiment 1. It is possible that the recognizability of different target words were affected differently by the 30\% speed up, explaining this difference between Experiments 1 and 3a. Crucially, no difference in transcription accuracy was identified between the Non-Tongue Twister Context and the Tongue Twister Context, and the interaction between Context and Label was not significant. 
+
+```{r, accuracy tables exp 3a}
+m = accuracyTable(d.exp.exposure.norejects, "3a", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "3a", which = "ignore order")
+m = accuracyTable(d.exp.exposure.norejects, "3a", which = "shifted only")
+```
+
+### Experiment 3b
+The patterns were similar to those in Experiment 1, which makes sense as the stimuli of Experiment 3b are identical to the Non-Tongue Twister condition of Experiment 1. There was no significant main effect of Context (Sober vs. Intoxicated) or interaction between Context and Label. This is not surprising: participants in both Context conditions heard the same exposure stimuli, only with different instructions.
+
+```{r, accuracy tables exp 3b}
+m = accuracyTable(d.exp.exposure.norejects, "3b", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "3b", which = "ignore order")
+m = accuracyTable(d.exp.exposure.norejects, "3b", which = "shifted only")
+
+```
+
+### Experiment 4b
+The overall transcription accuracy in Experiment 4b was comparable to the transcription accuracy in Experiment 3a. No significant difference in transcription accuracy was identified between either the Label or Context conditions or the interaction between Label and Context. This suggests that the stimuli in each condition were comparable in terms of how difficult they were to comprehend and transcribe. 
+
+```{r, accuracy tables exp 4b}
+m = accuracyTable(d.exp.exposure.norejects, "4b", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "4b", which = "ignore order")
+m = accuracyTable(d.exp.exposure.norejects, "4b", which = "shifted only")
+
+```
+
+### Experiment 5
+Transcription accuracy in Experiment 5 is slightly lower compared to Experiment 4b. A likely reasons for this is the additional difficulty of transcribing overt production difficulties and repairs in Experiment 5. For example, participants might have been unsure whether or not to transcribe the word containing the production difficulty/repair. 
+
+```{r, accuracy tables exp 5}
+m = accuracyTable(d.exp.exposure.norejects, "5", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "5", which = "ignore order")
+m = accuracyTable(d.exp.exposure.norejects, "5", which = "shifted only")
+```
+
+
+## Analyses
+
+### Overall accuracy
+```{r, accuracy models, warning=T}
+m = exposureModel(d.exp.exposure.norejects, "1", which = "overall")
+m = exposureModel(d.exp.exposure.norejects, "2", which = "overall")
+m = exposureModel(d.exp.exposure.norejects, "3a", which = "overall")
+m = exposureModel(d.exp.exposure.norejects, "3b", which = "overall")
+m = exposureModel(d.exp.exposure.norejects, "4b", which = "overall")
+m = exposureModel(d.exp.exposure.norejects, "5", which = "overall")
+```
+
+
+### Overall accuracy (ignoring order)
+```{r, accuracy models ignoring order, warning=T}
+m = exposureModel(d.exp.exposure.norejects, "1", which = "ignore order")
+m = exposureModel(d.exp.exposure.norejects, "2", which = "ignore order")
+m = exposureModel(d.exp.exposure.norejects, "3a", which = "ignore order")
+m = exposureModel(d.exp.exposure.norejects, "3b", which = "ignore order")
+m = exposureModel(d.exp.exposure.norejects, "4b", which = "ignore order")
+m = exposureModel(d.exp.exposure.norejects, "5", which = "ignore order")
+```
+
+
+### Accuracy for shifted words only
+Unsurprisingly, accuracy on only the shifted words was lower than when all words were considered. This was particularly true for the experiments with faster stimuli, and overt signs of production difficulty. 
+
+For some experiments, we found a significant effect of the accuracy of shifted words on the perceptual recalibration effect (Experiments 1 and 2). With the exception of Experiment 1 though, it was never the case that the accuracy of shifted words affected the interaction of Context and Label condition (i.e., Context x Label x Accuracy; this was significant in Experiment 1), or that the inclusion of accuracy changed the significance of the interaction of Context and Label condition (that wasn't even the case for Experiment 1).
+
+Note: Since Experiment 2 did only contain typical s/sh tokens, it is not included in the analyses of the transcription accuracy of shifted words.
+
+```{r, accuracy models shifted only, warning=T}
+m = exposureModel(d.exp.exposure.norejects, "1", which = "shifted only")
+m = exposureModel(d.exp.exposure.norejects, "3a", which = "shifted only")
+m = exposureModel(d.exp.exposure.norejects, "3b", which = "shifted only")
+m = exposureModel(d.exp.exposure.norejects, "4b", which = "shifted only")
+m = exposureModel(d.exp.exposure.norejects, "5", which = "shifted only")
+```
+
+
+
+
+
+
+
+
+# Test block
+
+## Categorization curves for all experiments (averaging across trial bins)
+```{r test block plots}
+myGplot.defaults(type = "paper")
+
+plotCategorizationCurve(d.exp.test.norejects, "1")
+plotCategorizationCurve(d.exp.test.norejects, "2")
+plotCategorizationCurve(d.exp.test.norejects, "3a")
+plotCategorizationCurve(d.exp.test.norejects, "3b", panelBy = Cond) 
+plotCategorizationCurve(d.exp.test.norejects, "4b")
+plotCategorizationCurve(d.exp.test.norejects, "5", panelBy = Cond) 
+
+plotCategorizationOverTrials(d.exp.test.norejects, "1")
+plotCategorizationOverTrials(d.exp.test.norejects %>%
+                               filter(Context == "non-TT"), 
+                             experiment = c("1", "2"),
+                             labels = list(
+                               c("Non-tongue twister", 
+                                 "Only typical s/ʃ"),
+                               c("Non-Tongue Twister\n(with shifted s/ʃ, Experiment 1)", 
+                                 "Non-Tongue Twister\n(only typical s/ʃ, Experiment 2")))
+plotCategorizationOverTrials(d.exp.test.norejects, experiment = "3a")
+plotCategorizationOverTrials(d.exp.test.norejects, experiment = "3b", order = c(2,1))
+plotCategorizationOverTrials(d.exp.test.norejects, experiment = "4b")
+plotCategorizationOverTrials(d.exp.test.norejects %>%
+                               filter((Experiment == "4b" & Context == "non-TT") | Experiment == "5"), 
+                             experiment = c("4b","5"), order = c(3,2,1))
+```
+
+
+
+
+
+
+## Experiment 1: Tongue-Twister vs Non-Tongue Twister (8 critical trials)
+### Main analyses
+```{r exp1 test block analysis}
+m = testModel(data = d.exp.test.norejects, experiment = "1", includeTrial = F, control = "")
+m = testModel(data = d.exp.test.norejects, experiment = "1", includeTrial = T, control = "")
+```
+
+### With control for accuracy
+These and all other control analyses assessing whether accuracy during exposure affected the degree of perceptual recalibration were conducted in order to address reviewers' questions about possible effects of these variables. This data report includes separate control analyses for all three accuracy measures we considered (see section on Exposure block) for all experiments. Each analysis adds the empirical logit transformed by-participant accuracy as well as all its interactions with any of the other predictors already present in the model.
+
+The mapping from variable names to accuracy measure is:
+ 
+ 1. Overall order-sensitive accuracy (empirical logit transformed and then centered) - cAcc.el
+ 2. Overall order-insensitive accuracy (empirical logit transformed and then centered) - cAcc.NO.el
+ 3. Accuracy for critical shifted words only (empirical logit transformed and then centered) - cAcc.ST.el
+
+**Reproducibility note:** We emphasize that adding additional control analyses would be *anti*-conservative, and thus bad practice, if we reported results as significant if they met the significance criterion in one of our analyses. In the present project, however, we found consistent *null* results of the manipulation of interest (Context, such as whether a shifted pronunciation occurred as part of a tongue twister). The purpose of the control analyses was thus to assess the probability that these null results were caused by potential confounds due to differences in the task engagement during exposure, or differences in the extent to which participants could understand and process the critical shifted words during exposure. 
+
+If any of our control analyses had returned significant effects of Context, these effects would have to be considered with great care. This holds in particular, as only the control analyses based on overall order-sensitive accuracy were part of the original planned analyses (see notes in the section on Exposure block).
+
+```{r exp1 test block analysis with accuracy}
+m = testModel(data = d.exp.test.norejects, experiment = "1", includeTrial = T, control = "overall")
+m = testModel(data = d.exp.test.norejects, experiment = "1", includeTrial = T, control = "ignore order")
+m = testModel(data = d.exp.test.norejects, experiment = "1", includeTrial = T, control = "shifted only")
+```
+
+### Only first trial bin
+```{r, exp1 test block analysis only first bin, echo=FALSE}
+m = testModel(data = d.exp.test.norejects %>% filter(TrialBin.first == 0), 
+              experiment = "1", includeTrial = F, control = "")
+
+```
+
+
+
+
+## Experiment 2: Baseline (Non-Tongue Twister, 8 critical typical-only/unshifted trials)
+
+### Main analyses
+```{r exp2 test block analysis}
+m = testModel(data = d.exp.test.norejects, experiment = "2", includeTrial = F, control = "")
+m = testModel(data = d.exp.test.norejects, experiment = "2", includeTrial = T, control = "")
+```
+
+### With control for accuracy
+For Experiment 2, the transcription accuracy of shifted tokens during exposure cannot be included as a control predictor in the analysis of categorization responses since Experiment 2 did only contain typical s/sh tokens. 
+
+```{r exp2 test block analysis with accuracy}
+m = testModel(data = d.exp.test.norejects, experiment = "2", includeTrial = T, control = "overall")
+m = testModel(data = d.exp.test.norejects, experiment = "2", includeTrial = T, control = "ignore order")
+```
+
+
+
+### Experiment 2 vs. 1 (only Non-Tongue Twisters)
+```{r, exp 2 vs. 1 - select data, include = F}
+p.exp12.test =  d.exp.test.norejects %>% 
+  filter(Experiment %in% c("2", "1"), Context == "non-TT") %>%
+  prepVars() %>%
+  mutate(
+    Condition = factor(mapvalues(Condition, 
+                          from = c("notTT_unshifted", "notTT"),
+                          to = c("Unshifted Non-Tongue Twister Context", "Non-Tongue Twister Context")),
+                       levels = c("Non-Tongue Twister Context", "Unshifted Non-Tongue Twister Context"))
+  )
+  
+contrasts(p.exp12.test$Condition) = contr.sum(2)     
+colnames(contrasts(p.exp12.test$Condition)) <- c("shifted vs unshifted")
+```
+
+
+#### Main analyses
+```{r, exp 2 vs. 1 - test block analysis, echo=FALSE}
+m.exp12.label.condition = glmer(ResponseSH ~ Label * Condition + 
+        (1 | RandomID), data=p.exp12.test, family=binomial)
+summary(m.exp12.label.condition)
+
+m.exp12.label.condition.bin = glmer(ResponseSH ~ Label * Condition * Trial + 
+        (1 | RandomID), data=p.exp12.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp12.label.condition.bin)
+```
+
+
+#### Simple effects analyses comparing Label effect across Experiments 1 and 2
+```{r, exp 2 vs. 1 - simple effect analysis a, echo=FALSE}
+m.exp12.label.condition.bin.simple = glmer(ResponseSH ~ Label * Condition * TrialBin.first - Label +  
+        (1|RandomID), data=p.exp12.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp12.label.condition.bin.simple)
+```
+
+#### Simple effects analyses comparing Experiment 1 vs. 2 effect across Label condition
+```{r, exp 2 vs. 1 - simple effect analysis b, echo=FALSE}
+m.exp12.label.condition.bin.simple2 = glmer(ResponseSH ~ Label * Condition * Trial - Condition + 
+        (1|RandomID), data=p.exp12.test, family=binomial, 
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp12.label.condition.bin.simple2)
+```
+
+
+#### With control for accuracy
+```{r, exp 2 vs. 1 - test block analysis with accuracy controls}
+summary(glmer(ResponseSH ~ Label * Condition * cAcc.el * Trial + 
+        (1 | RandomID), data=p.exp12.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))))
+
+summary(glmer(ResponseSH ~ Label * Condition * cAcc.NO.el * Trial + 
+        (1 | RandomID), data=p.exp12.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))))
+```
+
+
+
+
+## Experiment 3a: Increase speed by 30%  (8 critical trials)
+
+### Main analyses
+```{r exp3a test block analysis}
+m = testModel(data = d.exp.test.norejects, experiment = "3a", includeTrial = F, control = "")
+m = testModel(data = d.exp.test.norejects, experiment = "3a", includeTrial = T, control = "")
+```
+
+### With control for accuracy
+```{r exp3a test block analysis with accuracy}
+m = testModel(data = d.exp.test.norejects, experiment = "3a", includeTrial = T, control = "overall")
+m = testModel(data = d.exp.test.norejects, experiment = "3a", includeTrial = T, control = "ignore order")
+m = testModel(data = d.exp.test.norejects, experiment = "3a", includeTrial = T, control = "shifted only")
+```
+
+### Only first trial bin
+```{r, exp3a test block analysis only first bin, echo=FALSE}
+m = testModel(data = d.exp.test.norejects %>% filter(TrialBin.first == 0), 
+              experiment = "3a", includeTrial = F, control = "")
+
+```
+
+
+### Experiment 3a vs. 1 (to see whether faster speech rate matters)
+
+```{r, compare Experiments 3a vs. 1, echo=FALSE}
+p.exp13a.test = d.exp.test.norejects %>%
+  filter(Experiment %in% c("3a", "1")) %>%
+  prepVars()
+
+p.exp13a.test$Exp = factor(p.exp13a.test$Experiment, levels = c("1", "3a"))
+contrasts(p.exp13a.test$Exp) = contr.sum(2)     
+colnames(contrasts(p.exp13a.test$Exp)) <- c("1 vs. 3a")
+
+m.exp13a.label.context.bin = glmer(ResponseSH ~ Label  * Context * Exp * Trial + 
+        (1|RandomID), data=p.exp13a.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp13a.label.context.bin)
+```
+
+
+
+
+
+
+
+
+## Experiment 3b: Drunk vs Sober (8 critical trials)
+
+### Main analyses
+```{r exp3b test block analysis}
+m = testModel(data = d.exp.test.norejects, experiment = "3b", includeTrial = F, control = "")
+m = testModel(data = d.exp.test.norejects, experiment = "3b", includeTrial = T, control = "")
+```
+
+### With control for accuracy
+```{r exp3b test block analysis with accuracy}
+m = testModel(data = d.exp.test.norejects, experiment = "3b", includeTrial = T, control = "overall")
+m = testModel(data = d.exp.test.norejects, experiment = "3b", includeTrial = T, control = "ignore order")
+m = testModel(data = d.exp.test.norejects, experiment = "3b", includeTrial = T, control = "shifted only")
+```
+
+### Only first trial bin
+```{r, exp3b test block analysis only first bin, echo=FALSE}
+m = testModel(data = d.exp.test.norejects %>% filter(TrialBin.first == 0), 
+              experiment = "3b", includeTrial = F, control = "")
+
+```
+
+
+### Experiments 3b vs. 1 (to compare tongue twister to intoxication manipulation)
+Both Experiment 3b and 1 use the original stimulis at a speech of about 2-2.5 second per 4-word phrase. We thus compare Experiment 3b to Experiment 1 to see whether alleged intoxication differed in any way from the effect of tongue twisters.
+
+```{r exp 3b - test to see if this is any different from the original exp 1, echo=FALSE}
+p.exp13b.test = d.exp.test.norejects %>%
+  filter(Experiment %in% c("3b", "1")) %>%
+  prepVars()
+
+p.exp13b.test$Exp = factor(p.exp13b.test$Experiment, levels = c("1", "3b"))
+contrasts(p.exp13b.test$Exp) = contr.sum(2)     
+colnames(contrasts(p.exp13b.test$Exp)) <- c("1 vs. 3b")
+
+m.exp13b.label.context.bin = glmer(ResponseSH ~ Label  * Context * Exp * Trial + 
+        (1|RandomID), data=p.exp13b.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp13b.label.context.bin)
+```
+
+
+
+
+
+
+## Experiment 4b: only best stimuli (Tongue twister vs. Non-Tongue Twister, 4 critical trials)
+
+### Main analyses
+```{r, exp4b test block analysis}
+m = testModel(data = d.exp.test.norejects, experiment = "4b", includeTrial = F, control = "")
+m = testModel(data = d.exp.test.norejects, experiment = "4b", includeTrial = T, control = "")
+```
+
+### Simple effect
+```{r, exp4b - select data, include = F}
+p.exp4b.test = d.exp.test.norejects %>% 
+  filter(Experiment == "4b") %>%
+  prepVars()
+```
+
+```{r, exp4b simple effect}
+m.exp4b.label.context.bin.simple = glmer(ResponseSH ~ Label / Context * Trial + 
+        (1|RandomID), data=p.exp4b.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp4b.label.context.bin.simple)
+
+m.exp4b.label.context.bin.simple2 = glmer(ResponseSH ~ Context / Label  * Trial + 
+        (1|RandomID), data=p.exp4b.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp4b.label.context.bin.simple2)
+```
+
+### With control for accuracy
+```{r, exp4b test block analysis with accuracy}
+m = testModel(data = d.exp.test.norejects, experiment = "4b", includeTrial = T, control = "overall")
+m = testModel(data = d.exp.test.norejects, experiment = "4b", includeTrial = T, control = "ignore order")
+m = testModel(data = d.exp.test.norejects, experiment = "4b", includeTrial = T, control = "shifted only")
+```
+
+### Only first trial bin
+```{r, exp4b test block analysis only first bin, echo=FALSE}
+m.exp4b.label.context.bin1 = glmer(ResponseSH ~ Label  * Context + 
+        (1|RandomID), data=p.exp4b.test, family=binomial, subset = Trial == 0,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp4b.label.context.bin1)
+
+m.exp4b.label.context.bin1.simple = glmer(ResponseSH ~ Context / Label + 
+        (1|RandomID), data=p.exp4b.test, family=binomial, subset = Trial == 0, 
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp4b.label.context.bin1.simple)
+
+m.exp4b.label.context.bin1.simple = glmer(ResponseSH ~ Label / Context + 
+        (1|RandomID), data=p.exp4b.test, family=binomial, subset = Trial == 0, 
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp4b.label.context.bin1.simple)
+```
+
+
+### Experiment 4b vs. 3a (to compare effect of 4 trials vs. 8 trials of exposure)
+```{r, exp4b compare short 4 trial to 8 trial - notTT only, echo=FALSE}
+p.exp3a4b.test = d.exp.test.norejects %>%
+  filter(Experiment %in% c("3a", "4b")) %>%
+  prepVars()
+
+p.exp3a4b.test$Exp = factor(p.exp3a4b.test$Experiment, levels = c("3a", "4b"))
+contrasts(p.exp3a4b.test$Exp) = contr.sum(2)     
+colnames(contrasts(p.exp3a4b.test$Exp)) <- c("3a vs. 4b")
+
+m.exp3a4b = glmer(ResponseSH ~ Label * Context * Exp + 
+        (1|RandomID), data=p.exp3a4b.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp3a4b)
+
+m.exp3a4b.bin = glmer(ResponseSH ~ Label * Context * Exp * Trial + 
+        (1|RandomID), data=p.exp3a4b.test, family=binomial, 
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp3a4b.bin)
+
+```
+
+
+
+
+
+
+
+## Experiment 5 - Sound of struggle either during or after 
+We compared the two new Tongue Twister conditions of Experiment 5 against the Non-Tongue Twister condition of Experiment 4b.
+
+### Main analyses
+```{r, experiment 5}
+d.exp5.test = d.exp.test.norejects %>%
+  filter(Condition %in% c("notTTspeed30short4","TTspeed30struggleshort4", "TTspeed30struggleaftershort4")) %>%
+  prepVars()
+
+d.exp5.test$Context = mapvalues(d.exp5.test$Condition, 
+                              from = c("notTTspeed30short4","TTspeed30struggleshort4", "TTspeed30struggleaftershort4"),
+                              to = c("Non-Tongue Twister Context", "During", "After"))
+
+
+d.exp5.test$Context = factor(d.exp5.test$Context, levels = c("Non-Tongue Twister Context", "During", "After"))
+contrasts(d.exp5.test$Context) = cbind("During vs. non-TT" = c(0, 1, 0), "After vs. non-TT" = c(0, 0, 1))
+
+m.exp5.label.context = glmer(ResponseSH ~ Label  * Context + 
+        (1 | RandomID), data=d.exp5.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp5.label.context)
+
+m.exp5.label.context.bin = glmer(ResponseSH ~ Label  * Context *  Trial + 
+        (1 + Trial | RandomID), data=d.exp5.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp5.label.context.bin)
+
+# Assess whether removal of 2-way (and thus 3-way) w/ Context is significant (chisq = 8, p < .23)
+m.exp5.label.context.bin.noContextInt = glmer(ResponseSH ~ Label *Trial + Context + 
+        (1 + Trial | RandomID), data=d.exp5.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+# summary(m.exp5.label.context.bin.noContextInt)
+anova(m.exp5.label.context.bin.noContextInt, m.exp5.label.context.bin)
+```
+
+
+### With control for accuracy
+
+```{r, exp5 test block analysis with accuracy, echo=FALSE}
+summary(glmer(ResponseSH ~ Label  * Context *  Trial * cAcc.el + 
+        (1 + Trial | RandomID), data=d.exp5.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))))
+
+summary(glmer(ResponseSH ~ Label  * Context *  Trial * cAcc.NO.el + 
+        (1 + Trial | RandomID), data=d.exp5.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))))
+
+summary(glmer(ResponseSH ~ Label  * Context *  Trial * cAcc.ST.el + 
+        (1 + Trial | RandomID), data=d.exp5.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000))))
+```
+
+
+### Only first trial bin
+```{r, exp5 test block analysis only first bin, echo=FALSE}
+m.exp5.label.context.1stBinonly = glmer(ResponseSH ~ Label * Context + 
+        (1 | RandomID), data=d.exp5.test, subset = Trial == 0,
+        family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp5.label.context.1stBinonly)
+
+# Focus on only "after" condition in order to avoid problem of collinearity
+d.exp5.test.after = d.exp5.test %>%
+  filter(Cond != "Difficulty during") %>%
+  droplevels()
+contrasts(d.exp5.test.after$Context) = cbind("After vs. non-TT" = c(-1, 1))
+
+m.exp5.label.context.1stBinonly.noDuring = glmer(ResponseSH ~ Label * Context + 
+        (1 | RandomID), data= d.exp5.test.after, subset = Trial == 0,
+        family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp5.label.context.1stBinonly.noDuring)
+```
+
+
+# Experiments 1, 3a, 3b, 4b, and 5 combined
+
+## Frequentist analysis
+```{r, all TT vs. non-TT experiments combined test block analysis, echo=FALSE}
+d.exp.combined.test = d.exp.test.norejects %>%
+  filter(Experiment %in% c("1", "3a", "3b", "4b", "5")) %>%
+  # If one wants to recode "drunk" as "tongue twister", uncomment the following lines (it makes no difference)
+  # mutate(
+  #   Context = factor(ifelse(Experiment == "3b" & Condition == "drunk", "TT", as.character(Context)))
+  # ) %>%
+  prepVars() 
+
+m.exp.combined.label.context = glmer(ResponseSH ~ Label  * Context + 
+        (1 | RandomID), data=d.exp.combined.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp.combined.label.context)
+
+m.exp.combined.label.context.bin = glmer(ResponseSH ~ Label  * Context *  Trial + 
+        (1 + Trial | RandomID), data=d.exp.combined.test, family=binomial,
+        control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.exp.combined.label.context.bin)
+```
+
+## Bayesian analysis
+```{r}
+b.exp.combined.label.context.bin = brm(ResponseSH ~ Label  * Context *  Trial + 
+        (1 + Trial | RandomID), data=d.exp.combined.test, family=binomial, 
+        chains = 4, cores = 4, file = "m.test.Exp1+3a+3b+4b+5-brm")
+hypothesis(b.exp.combined.label.context.bin, "LabelSHvsS:ContextnotTTvsTT > 0")
+```
+
+
+
+
+
+
+
+# Norming experiments
+
+## Experiment 4a: Assessing the plausibility of our tongue twisters (Likert Task)
+
+```{r, likert resp plot by type, include=FALSE}
+d.ttnorm.resp.norejects$Label = mapvalues(d.ttnorm.resp.norejects$Label, 
+                              from = c("sh", "s"),
+                              to = c("ʃ-Label", "S-Label"))
+
+d.ttnorm.resp.norejects %<>%
+  mutate(
+    Type = factor(mapvalues(paste(Surrounding, ThirdWord), 
+                            from = c("Filler Filler",
+                                     "Fricative Filler",
+                                     "Filler Shifted",
+                                     "RealTT RealTT",
+                                     "Fricative Shifted"),
+                            to = c("Filler", "Filler", 
+                                   "Filler",
+                                   "Tongue Twisters\n(Attested)", "Tongue Twisters\n(Current Experiments)")),
+                  levels = c("Filler", 
+                             "Tongue Twisters\n(Current Experiments)", "Tongue Twisters\n(Attested)"))
+  )
+
+# Filter out tongue twister that we are using in Experiment 4b
+# unique(subset(d.exp.exposure.norejects, Condition == "TTspeed30short4")$Filename)
+using = c("6b.wav", "5b.wav", "1b.wav", "7b.wav", "6a.wav", "5a.wav", "1a.wav", "7a.wav")
+```
+
+### Relative ratings for Tongue Twister stimuli by Label condition
+```{r, ratings by Label condition, echo = FALSE}
+# Mean for the TTs for each Label
+d.ttnorm.resp.norejects %>%
+  filter(Type == "Tongue Twisters\n(Current Experiments)") %>%
+  group_by(RandomID,Label) %>%
+  dplyr::summarise(
+    MeanResponse = mean(Response),
+    SD = sd(Response)
+  ) %>%
+  group_by(Label) %>%
+  dplyr::summarise(
+    MeanR= mean(MeanResponse),
+    SD = sd(MeanResponse)
+  ) 
+```
+
+### Analysis
+```{r, exp 4a test}
+# Test to see if these are significnatly different
+d.exp4a.test = 
+  d.ttnorm.resp.norejects %>%
+  mutate(
+    Type = factor(
+      mapvalues(
+        paste(Surrounding, ThirdWord), 
+        from = c("Filler Filler",
+                 "Fricative Filler",
+                 "Filler Shifted",
+                 "RealTT RealTT",
+                 "Fricative Shifted"),
+        to = c("Filler\n(no s/ʃ)", "Non-tongue twister", 
+               "Non-tongue twister",
+               "Tongue twister\n(attested)", "Tongue twister\n(current experiments)")),
+      levels = c("Tongue twister\n(attested)", "Tongue twister\n(current experiments)",
+                 "Non-tongue twister",
+                 "Filler\n(no s/ʃ)")
+    ),
+    Type.Full = factor(
+      mapvalues(
+        paste(Surrounding, ThirdWord), 
+        from = c("Filler Filler",
+                 "Fricative Filler",
+                 "Filler Shifted",
+                 "RealTT RealTT",
+                 "Fricative Shifted"),
+        to = c("Filler\n(no s/ʃ)", "Non-tongue twister\n3 typical s/ʃ + filler", 
+               "Non-tongue twister\n3 fillers + shifted s/ʃ",
+               "Tongue twister\n(attested)", "Tongue twister\n(current experiments)")),
+      levels = c("Tongue twister\n(attested)", "Tongue twister\n(current experiments)",
+                 "Non-tongue twister\n3 typical s/ʃ + filler",
+                 "Non-tongue twister\n3 fillers + shifted s/ʃ",
+                 "Filler\n(no s/ʃ)")
+    ), 
+    Label = factor(Label, levels = c("ʃ-Label", "S-Label"))
+  )
+# summary(d.exp4a.test$Type.Full)
+contrasts(d.exp4a.test$Type.Full) = cbind("Attested TT vs. filler" = c(1,0,0,0,-1),
+                                          "Our TT vs. filler" = c(0,1,0,0,-1),
+                                          "3 typical + filler vs. filler"  = c(0,0,1,0,-1),
+                                          "3 filler + shifted vs. filler" = c(0,0,0,1,-1)
+                                          )   
+contrasts(d.exp4a.test$Type) = cbind("Attested TT vs. filler" = c(1,0,0,-1),
+                                          "Our TT vs. filler" = c(0,1,0,-1),
+                                          "Our Non-TT vs. filler"  = c(0,0,1,-1)
+                                          )   
+
+m.exp4a.label.context.full = lmer(Response ~ Type * Label + 
+        (1 + Type || RandomID), data=d.exp4a.test)
+summary(m.exp4a.label.context.full)
+
+```
+
+### Plot
+```{r, plot for rating experiment, echo=FALSE}
+d.exp4a.test %>%
+  group_by(RandomID) %>%
+  mutate(Response = scale(Response)) %>%
+  group_by(RandomID, Type, Label) %>%
+  dplyr::summarize(
+    Response = mean(Response)
+  ) %>%
+  ungroup() %>%
+  ggplot(
+    aes(x = Type, y = Response, color = factor(Label, levels = c("ʃ-Label", "S-Label")))
+  ) +
+  stat_summary(fun.y = mean, geom = "point", size = 6) +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.5)+ 
+  scale_y_continuous("Standardized ratings (by-participant means)") +
+  scale_x_discrete("") +
+  scale_color_manual("Label",
+                         breaks = c("ʃ-Label", "S-Label"),
+                         labels = c("ʃ", "s"),
+                         values = c(color.sh, color.s)) 
+
+ggsave(filename = "../figures/Ratings_Tongue twister-likeness.pdf",
+           width = 6, 
+           height = 4.2, device = cairo_pdf)
+
+```
+
+
+# Auxialary experiments (not reported in detail in the paper)
+
+## Experiment 1b (more extremely shifted SH-exposure)
+
+### Accuracy 
+```{r, accuracy tables exp 1b}
+accuracyTable(d.exp.exposure.norejects, "1b", which = "overall")
+accuracyTable(d.exp.exposure.norejects, "1b", which = "ignore order")
+accuracyTable(d.exp.exposure.norejects, "1b", which = "shifted only")
+```
+
+### Categorization of Experiment 1 and 1b compared
+```{r, categorization curve Exp 1b}
+plotCategorizationCurve(d.exp.test.norejects, c("1", "1b"), panelBy = Experiment.long)
+```
+
+
+## Experiment 2b (Exposure to only fillers)
+
+### Accuracy 
+```{r, accuracy tables exp 2b}
+m = accuracyTable(d.exp.exposure.norejects, "2b", which = "overall")
+m = accuracyTable(d.exp.exposure.norejects, "2b", which = "ignore order")
+```
+
+### Categorization of Experiment 2 and 2b compared
+```{r, categorization curve Exp 2b}
+plotCategorizationCurve(d.exp.test.norejects, c("2", "2b"))
+```
+
+
+## Experiment 5b: Ratings of production difficulty
+
+In this norming study, participants listened to the stimuli employed in the other experiments, and rated whether they thought the speaker experienced production difficulty (2AFC). This was intended as a check of whether the manipulation introduced in Experiment 5 (insertion of overt signs of production difficulty) was successful in eliciting the perception of production difficulty. This norming study only included stimuli with overt signs of production difficulty *during* the shifted word. This exlusion of stimuli with overt signs of production difficulty *after* the shifted word was intentional, and was only noticed after the norming study was completed. Since the norming study found that overt signs of production difficulty during the shifted word had the intended effect (see below), and since we had no reason to doubt that the stimuli with overts signs of production difficulty after the shifted word would fail to elicit the perception of production difficulty, we did not repeat the norming study.
+
+### Plots
+Experiment 5b finds that the phrases with overt signs of production difficulty (Experiment 5, difficulty during) were most likely to be perceived as involving production difficulty, as intended.
+
+Additionally, phrases with shifted sounds were perceived as being associated with more production difficulty than phrases without shifted sounds (at least for Experiments 1-4; for Experiment 5, ratings were at ceiling). Interestingly, this was particularly the case for shifted /s/, compared to shifted /sh/. 
+
+This might indicate that /s/ shifted sounds were perceived to be more atypical, which in turn might offer an alternative explanation for the asymmetry in perceptual recalibration observed Experiments 1-4 (found only for the S-labeled, but not the SH-labeled, conditions). This is indeed the reasons why we also conducted Experiment 1b with more extremely shifted SH, to see whether this would elicit perceptual recalibration for SH. However, as can be seen from the summary of Experiment 1b, the more extreme shifts of SH resulted in *fewer* SH responses during the test block. This rules out at least the simplest hypothesis that shifted SH failed to elicit perceptual recalibration solely because the SH shifts were not sufficiently extreme.
+
+Finally, tongue twisters were somewhat more likely to be perceived as being associated with production difficulty, compared to non-tongue twisters, but this was only the case for /sh/ sounds. This is interesting in light of the fact that we did not find perceptual recalibration---and thus no blocking of perceptual recalibration---for /sh/ sounds. The lack of a difference in perceived production difficulty for /s/ between tongue twisters and non-tongue twisters might be a reason why we do not observe blocking of perceptual recalibration for /s/ in any of our experiments.
+
+```{r rating resp plot by type, echo=FALSE}
+d.rating.resp.norejects %<>%
+  mutate(
+        Type = factor(
+      mapvalues(
+        FileType, 
+        from = c("Filler Filler",
+                 "Fricative Filler",
+                 "Filler Shifted",
+                 "Fricative Shifted"),
+        to = c("Filler\n(no s/ʃ)", "Non-tongue twister", 
+               "Non-tongue twister",
+               "Tongue twister")),
+      levels = c("Tongue twister",
+                 "Non-tongue twister",
+                 "Filler\n(no s/ʃ)")
+    ),
+    Type.Full = factor(
+      mapvalues(
+        FileType, 
+        from = c("Filler Filler",
+                 "Fricative Filler",
+                 "Filler Shifted",
+                 "Fricative Shifted"),
+        to = c("Filler\n(no s/ʃ)", "Non-tongue twister\n(3 typical s/ʃ + filler)", 
+               "Non-tongue twister\n(3 fillers + shifted ʃ/s)",
+               "Tongue twister\n(3 typical s/ʃ + shifted ʃ/s)")),
+      levels = c("Tongue twister\n(3 typical s/ʃ + shifted ʃ/s)",
+                 "Non-tongue twister\n(3 fillers + shifted ʃ/s)",
+                 "Non-tongue twister\n(3 typical s/ʃ + filler)",
+                 "Filler\n(no s/ʃ)")
+    ),
+    Condition = factor(
+      mapvalues(d.rating.resp.norejects$Condition,
+                from = c("TT", "notTT", "notTTredo1"),
+                to = c("Shifted TT", "Shifted NonTT", "Shifted++ NonTT"))
+    ),
+    Experiment = factor(
+      case_when(
+        Condition == "TTratingstruggle" ~ "Experiment 5\n(difficult during)",
+        Condition == "Shifted++ NonTT" ~ "Experiment 1b",
+        Condition %in% c("Shifted NonTT", "Shifted TT") ~ "Experiment 1-4",
+        T ~ NA_character_
+      ),
+      levels = c(
+        "Experiment 1-4", 
+        "Experiment 1b", 
+        "Experiment 5\n(difficult during)")
+    ),
+    Experiment.full = factor(
+      case_when(
+        Condition == "TTratingstruggle" ~ "Experiment 5\n(difficult during)",
+        Condition == "Shifted++ NonTT" ~ "Experiment 1b",
+        Condition == "Shifted NonTT" ~ "Experiment 1-4\n(w/o any tongue twisters)",
+        Condition == "Shifted TT" ~ "Experiment 1-4\n(w/ tongue twisters)",
+        T ~ NA_character_
+      ),
+      levels = c(
+        "Experiment 1-4\n(w/o any tongue twisters)", 
+        "Experiment 1-4\n(w/ tongue twisters)", 
+        "Experiment 1b", 
+        "Experiment 5\n(difficult during)")
+    ),
+    Label = factor(
+      mapvalues(d.rating.resp.norejects$Label, 
+                              from = c("sh", "s"),
+                              to = c("ʃ-Label", "S-Label")),
+      levels = c("ʃ-Label", "S-Label")
+    ),
+    TrunFilename = factor(
+      substr(gsub("[ab]", "", Filename), 1, nchar(gsub("[ab]", "", Filename)) - 3),
+      levels = c(1:24, paste0(sort(rep(1:16, 16)), "_", 1:16))
+    )
+  ) %>% 
+  droplevels()
+
+# By type
+d.rating.resp.norejects %>%
+  filter(Condition != "Shifted++ NonTT") %>%
+  droplevels() %>%
+  group_by(RandomID, Type.Full, Label, Condition, Experiment) %>%
+  dplyr::summarise(
+    NDifficulty = sum(ifelse(Response == "Yes", 1, 0)),
+    NTrials = n(), 
+    PropDifficulty = NDifficulty/NTrials
+  ) %>%
+  ggplot(aes(x = Type.Full, y = PropDifficulty, color=Label)) +
+  stat_summary(fun.y = mean, geom = "point", size = 6) +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.5)+ 
+  scale_x_discrete("") +
+  scale_y_continuous("Perceived production difficulty\n(proportion of 'yes' responses)") + 
+  scale_color_manual("Label",
+                         breaks = c("ʃ-Label", "S-Label"),
+                         labels = c("ʃ", "s"),
+                         values = c(color.sh, color.s)) +
+  facet_grid(. ~ Experiment, scales = "free_x", space = "free_x") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave(filename = "../figures/Ratings_ProductionDifficulty 2AFC.pdf",
+           width = 8, 
+           height = 4.2, device = cairo_pdf)
+```
+
+The following figure shows the perceived production difficulty by item for shifted and non-shifted words (split by s and sh). Experiment 1b and 5 (difficulty during) are shown in separate panels.
+
+```{r rating resp plot by sentence, echo=FALSE, dependson=c(-1), fig.height=16.8, fig.width=12}
+# By sentence
+
+#   factor(
+#   gsub("[0-9]*_", "", d.rating.resp.norejects$Filename),
+#   levels(1:24)
+# )
+
+d.rating.resp.norejects %>%
+  filter(FileType != "Filler") %>%
+  group_by(RandomID, TrunFilename, Label, Condition, Experiment.full) %>%
+  dplyr::summarise(NDifficulty = sum(ifelse(Response == "Yes", 1, 0)),
+            NTrials = n(), 
+            PropDifficulty = NDifficulty/NTrials) %>%
+  ggplot(., aes(x = TrunFilename, y = PropDifficulty, color=Label)) +
+  stat_summary(fun.y = mean, geom = "point", size = 6) +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.5)+ 
+  scale_x_discrete("") +
+  scale_y_continuous("Perceived production difficulty\n(proportion of 'yes' responses)") + 
+  scale_color_manual("Label",
+                         breaks = c("ʃ-Label", "S-Label"),
+                         labels = c("ʃ", "s"),
+                         values = c(color.sh, color.s)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  facet_wrap(~ Experiment.full, scales = "free_x", nrow = 4)
+ggsave(filename = "../figures/Ratings_ProductionDifficulty 2AFC - by item.pdf",
+           width = 12, 
+           height = 16.8, device = cairo_pdf)
+
+
+```
+
+### Analysis
+Even when only the stimuli from Experiments 1-4 are considered (the left panel of the plot shown above), Tongue twisters are perceived as eliciting significantly more production difficulty than Non-tongue twisters.
+
+```{r rating resp stats, echo=FALSE}
+d.rating1 = d.rating.resp.norejects %>%
+  filter(Type %in% c("Tongue twister", "Non-tongue twister"),
+         Condition %in% c("Shifted TT", "Shifted NonTT"))
+
+d.rating1$Label.sum = factor(d.rating1$Label, levels = c("ʃ-Label", "S-Label"))
+contrasts(d.rating1$Label.sum) = contr.sum(2)     
+colnames(contrasts(d.rating1$Label.sum)) <- c("SH vs S")
+
+d.rating1$Condition.sum = factor(d.rating1$Condition, levels = c("Shifted TT", "Shifted NonTT"))
+contrasts(d.rating1$Condition.sum) = contr.sum(2)     
+colnames(contrasts(d.rating1$Condition.sum)) <- c("TT vs notTT")
+
+m.rating1 = glmer(ifelse(Response == "Yes", 1, 0) ~ Condition.sum * Label.sum + 
+                       (1 | RandomID) + (1  | CorrectResponse3), 
+                       data = d.rating1, family = "binomial",
+                  control = glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=10000)))
+summary(m.rating1)
+```
+
+
+
+
+```{r, include=FALSE}
+# # Attempt at a non-linear model
+# library(purrr)
+# library(forcats)
+# library(tidyr)
+# library(modelr)
+# library(tidybayes)
+# library(ggstance)
+# library(ggridges)
+# library(cowplot)
+# library(rstan)
+# library(brms)
+# library(RColorBrewer)
+# 
+# niter = 1000
+# nwarm = 1000
+# chains = 4
+# cores = chains
+# 
+# my.prior <- 
+# #  prior(normal(0, 10), nlpar = "b0") + 
+#   prior(normal(0, 10), nlpar = "b1") + 
+#   prior(normal(0, 10), nlpar = "b2")
+#  
+# m.exp4b.label.condition.bin.nl <- 
+#   brm(bf(ifelse(Response == "SH", 1, 0) ~ b1 * exp(b2 * TrialBin.first), 
+# #         b0 ~ 1, 
+#          b1 ~ 1 + Label.sum * Context.sum + (1 | RandomID), 
+#          b2 ~ 1 + Label.sum * Context.sum + (1 + TrialBin.first | RandomID), 
+#          nl = TRUE),
+#             data = p.exp8.test, # exp8 is Experiment 4b (see below)
+#             prior = my.prior,
+#             family = bernoulli(),
+#             warmup = nwarm, iter = nwarm + niter,
+#             chains = chains, cores = cores)
+# 
+# m.exp4b.label.condition.bin.nl <- 
+#   brm(bf(ifelse(Response == "SH", 1, 0) ~ b1 * exp(b2 * TrialBin.first), 
+# #         b0 ~ 1, 
+#          b1 ~ 1 + Label.sum * Context.sum + (1 | RandomID), 
+#          b2 ~ 1 + Context.sum + (1 | RandomID), 
+#          nl = TRUE),
+#             data = p.exp8.test, # exp8 is Experiment 4b (see below)
+#             prior = my.prior,
+#             family = bernoulli(),
+#             warmup = nwarm, iter = nwarm + niter,
+#             chains = chains, cores = cores, control = list(adapt_delta = .9))
+# 
+# 
+# summary(m.exp4b.label.condition.bin.nl)
+# marginal_effects(m.exp1.label.condition.bin.nl)
+# 
+# # library(ggrepel)
+# #library(gganimate)
+# p.exp8.test %>% 
+#   group_by(Label.sum, Context.sum, RandomID) %>%
+#   data_grid(TrialBin.first = seq_range(TrialBin.first, n = 50)) %>%
+#   add_fitted_draws(m.exp4b.label.condition.bin.nl , scale = "linear", re_formula = NULL) %>%
+#   ggplot(aes(x = TrialBin.first, y = .value, color = Label.sum)) +
+#   stat_lineribbon(aes(y = .value)) +
+#   scale_fill_brewer(palette = "Greys") +
+#   scale_color_brewer(palette = "Set2") +
+#   facet_grid(~ Context.sum)
+```
+
+
+
+
+
+
+# Session info
+```{r session_info, include=TRUE, echo=TRUE, results='markup'}
+devtools::session_info()
+```
